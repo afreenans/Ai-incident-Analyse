@@ -564,14 +564,4 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ---
 
-## 👤 Author
 
-**Burhan Khan** — Cloud & DevOps Engineer
-
-[![GitHub](https://img.shields.io/badge/GitHub-techwithburhan-black?logo=github)](https://github.com/techwithburhan)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-techwithburhan-blue?logo=linkedin)](https://linkedin.com/in/techwithburhan)
-[![Blog](https://img.shields.io/badge/Blog-Hashnode-2962FF?logo=hashnode)](https://techwithburhan.hashnode.dev)
-
----
-
-> Built with ❤️ by [techwithburhan](https://github.com/techwithburhan) — *"Automate everything, observe everything."*
