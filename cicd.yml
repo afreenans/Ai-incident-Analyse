@@ -1,0 +1,359 @@
+###############################################################################
+# GitHub Actions — Full CI/CD Pipeline
+# Autonomous CI/CD Pipeline Optimizer
+#
+# Stages:
+#   1. validate   → lint, type-check, security scan
+#   2. test       → pytest with coverage gate
+#   3. build      → package app artifact, push to S3
+#   4. terraform  → plan (PR) or apply (main)
+#   5. deploy     → rolling instance refresh on ASG
+#   6. smoke      → post-deploy health check
+###############################################################################
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+
+# Cancel in-flight runs for the same branch on new push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  TF_VERSION: "1.7.0"
+  AWS_REGION: "us-east-1"
+  APP_NAME: "autonomous-cicd-optimizer"
+
+# ──────────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── Stage 1: Validate ────────────────────────────────────────────────────────
+  validate:
+    name: "Validate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy bandit safety
+
+      - name: Lint (ruff)
+        run: ruff check . --output-format=github
+
+      - name: Type check (mypy)
+        run: mypy app/ --ignore-missing-imports --no-error-summary
+
+      - name: Security scan — static analysis (bandit)
+        run: bandit -r app/ -ll -x tests/
+
+      - name: Security scan — dependency vulnerabilities (safety)
+        run: safety check -r requirements.txt --full-report
+        continue-on-error: false
+
+      - name: Terraform fmt check
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform -chdir=terraform fmt -check -recursive
+
+  # ── Stage 2: Test ────────────────────────────────────────────────────────────
+  test:
+    name: "Test"
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  # ── Stage 3: Build Artifact ──────────────────────────────────────────────────
+  build:
+    name: "Build"
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      artifact_version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate artifact version
+        id: version
+        run: |
+          VERSION="${{ github.sha }}-$(date +%Y%m%d%H%M%S)"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Build version: $VERSION"
+
+      - name: Package application
+        run: |
+          tar -czf app.tar.gz \
+            app/ \
+            requirements.txt \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.env'
+
+      - name: Configure AWS credentials (OIDC — no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-build-${{ github.run_id }}
+
+      - name: Upload artifact to S3
+        run: |
+          # Upload versioned artifact
+          aws s3 cp app.tar.gz \
+            s3://${{ secrets.ARTIFACT_BUCKET }}/builds/${{ steps.version.outputs.artifact_version }}/app.tar.gz
+
+          # Update "latest" pointer
+          aws s3 cp app.tar.gz \
+            s3://${{ secrets.ARTIFACT_BUCKET }}/latest/app.tar.gz
+
+          echo "Artifact uploaded: ${{ steps.version.outputs.artifact_version }}"
+
+  # ── Stage 4: Terraform Plan/Apply ────────────────────────────────────────────
+  terraform:
+    name: "Terraform (${{ github.ref == 'refs/heads/main' && 'apply' || 'plan' }})"
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'dev' || 'preview' }}
+    env:
+      TF_VAR_environment: ${{ github.ref == 'refs/heads/main' && 'dev' || 'dev' }}
+      TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-terraform-${{ github.run_id }}
+
+      - name: Terraform Init
+        run: terraform -chdir=terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform -chdir=terraform plan \
+            -var-file=dev.tfvars \
+            -input=false \
+            -out=tfplan \
+            -detailed-exitcode
+        continue-on-error: true
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Terraform Plan\n\`\`\`\n${{ steps.plan.outputs.stdout }}\n\`\`\``
+            })
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && steps.plan.outcome == 'success'
+        run: terraform -chdir=terraform apply -input=false -auto-approve tfplan
+
+  # ── Stage 5: Deploy ──────────────────────────────────────────────────────────
+  deploy:
+    name: "Deploy"
+    runs-on: ubuntu-latest
+    needs: terraform
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: dev
+      url: ${{ steps.alb.outputs.app_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy-${{ github.run_id }}
+
+      - name: Get ALB URL
+        id: alb
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "dev-${APP_NAME}-alb" \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text)
+          echo "app_url=http://$ALB_DNS:8000" >> $GITHUB_OUTPUT
+          echo "ALB DNS: $ALB_DNS"
+
+      - name: Trigger rolling instance refresh
+        id: refresh
+        run: |
+          ASG_NAME="dev-${APP_NAME}-asg"
+
+          REFRESH_ID=$(aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --preferences MinHealthyPercentage=50,InstanceWarmup=120 \
+            --query 'InstanceRefreshId' \
+            --output text)
+
+          echo "refresh_id=$REFRESH_ID" >> $GITHUB_OUTPUT
+          echo "Instance refresh started: $REFRESH_ID"
+
+      - name: Wait for instance refresh to complete
+        run: |
+          ASG_NAME="dev-${APP_NAME}-asg"
+          REFRESH_ID="${{ steps.refresh.outputs.refresh_id }}"
+          MAX_WAIT=600
+          ELAPSED=0
+          INTERVAL=30
+
+          echo "Waiting for refresh $REFRESH_ID to complete (max ${MAX_WAIT}s)..."
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            STATUS=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$ASG_NAME" \
+              --instance-refresh-ids "$REFRESH_ID" \
+              --query 'InstanceRefreshes[0].Status' \
+              --output text)
+
+            echo "[$ELAPSED s] Status: $STATUS"
+
+            if [ "$STATUS" = "Successful" ]; then
+              echo "Deployment complete!"
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "Deployment failed! Status: $STATUS"
+              exit 1
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          echo "Timed out waiting for deployment"
+          exit 1
+
+  # ── Stage 6: Smoke Test ──────────────────────────────────────────────────────
+  smoke:
+    name: "Smoke Test"
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get app URL
+        id: url
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --names "dev-${APP_NAME}-alb" \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text)
+          echo "base_url=http://$ALB_DNS:8000" >> $GITHUB_OUTPUT
+
+      - name: Health check
+        run: |
+          BASE_URL="${{ steps.url.outputs.base_url }}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check FAILED — HTTP $STATUS"
+            exit 1
+          fi
+          echo "Health check PASSED — HTTP $STATUS"
+
+      - name: Status checks
+        run: |
+          BASE_URL="${{ steps.url.outputs.base_url }}"
+          RESPONSE=$(curl -s -H "X-Role: viewer" "$BASE_URL/status/checks")
+          echo "Status checks response: $RESPONSE"
+          OVERALL=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('overall','UNKNOWN'))")
+          echo "Overall status: $OVERALL"
+          if [ "$OVERALL" != "PASS" ]; then
+            echo "Status checks FAILED"
+            exit 1
+          fi
+
+      - name: Post-deploy notification to optimizer
+        run: |
+          BASE_URL="${{ steps.url.outputs.base_url }}"
+          curl -s -X POST "$BASE_URL/webhooks/github-actions" \
+            -H "Content-Type: application/json" \
+            -H "X-Role: operator" \
+            -d '{
+              "repository": "${{ github.repository }}",
+              "branch": "${{ github.ref_name }}",
+              "sha": "${{ github.sha }}",
+              "run_id": "${{ github.run_id }}",
+              "actor": "${{ github.actor }}",
+              "event_name": "push",
+              "workflow": "${{ github.workflow }}"
+            }' || echo "Webhook notification failed (non-blocking)"
+
+      - name: Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: dev" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **App URL**: ${{ steps.url.outputs.base_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ All checks passed" >> $GITHUB_STEP_SUMMARY
