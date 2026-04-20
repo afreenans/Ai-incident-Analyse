@@ -1,567 +1,392 @@
-# 🚀 Agent-Pilot — Incident Management System
-
-[![CI/CD Pipeline](https://github.com/techwithburhan/Agent-Pilot/actions/workflows/test.yml/badge.svg)](https://github.com/techwithburhan/Agent-Pilot/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![AWS](https://img.shields.io/badge/AWS-Serverless-orange.svg)](https://aws.amazon.com/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
-
-> **Enterprise-grade Incident Management System** with AI-powered report generation, built on AWS serverless architecture with complete DevOps automation.
+# 🚀 Ai Incident Analyse
 
 ---
 
-## 📋 Table of Contents
+## 📌 Overview
 
-1. [Overview](#-overview)
-2. [Architecture](#-architecture)
-3. [Features](#-features)
-4. [Tech Stack](#-tech-stack)
-5. [Prerequisites](#-prerequisites)
-6. [Local Development Setup](#-local-development-setup)
-7. [AWS Services Implementation](#-aws-services-implementation)
-8. [Testing Strategy](#-testing-strategy)
-9. [CI/CD Pipeline](#-cicd-pipeline)
-10. [Monitoring & Logging](#-monitoring--logging)
-11. [Deployment](#-deployment)
-12. [Troubleshooting](#-troubleshooting)
-13. [Contributing](#-contributing)
+This system provisions, manages, and monitors a **production-ready AWS infrastructure** for the Autonomous CI/CD Pipeline Optimizer backend. It uses Terraform for Infrastructure as Code, GitHub Actions for the CI/CD pipeline, and CloudWatch for observability — all wired together with zero static AWS credentials.
 
 ---
 
-## 🎯 Overview
-
-**Agent-Pilot** is an automated incident management platform that:
-
-- ✅ Receives incident reports via REST API (API Gateway)
-- ✅ Processes incidents asynchronously using AWS Lambda
-- ✅ Generates AI-powered incident analysis reports
-- ✅ Stores reports in S3 with versioning enabled
-- ✅ Sends real-time notifications via SNS
-- ✅ Implements retry logic with DLQ (Dead Letter Queue)
-- ✅ Provides complete observability with CloudWatch
-
----
-
-## 🏗️ Architecture
+## 🏗️ Architecture at a Glance
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                        CLIENT                           │
-│              (REST API / HTTP Request)                  │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│              AWS API GATEWAY                            │
-│         (Rate Limiting + Auth + Routing)                │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│                 AWS SQS QUEUE                           │
-│        (Message Buffer + Retry Logic)                   │
-│           └── Dead Letter Queue (DLQ)                   │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│               AWS LAMBDA                                │
-│   ┌──────────────────────────────────────────────┐     │
-│   │  1. Parse & Validate Incident Payload        │     │
-│   │  2. AI Report Generation (Claude/OpenAI)     │     │
-│   │  3. Store Report → S3                        │     │
-│   │  4. Publish Notification → SNS               │     │
-│   └──────────────────────────────────────────────┘     │
-└───────────┬────────────────────┬────────────────────────┘
-            │                    │
-            ▼                    ▼
-┌───────────────────┐  ┌─────────────────────────────────┐
-│     AWS S3        │  │          AWS SNS                 │
-│ (Report Storage   │  │   (Email / SMS Notifications)    │
-│  + Versioning)    │  └─────────────────────────────────┘
-└───────────────────┘
-            │
-            ▼
-┌─────────────────────────────────────────────────────────┐
-│              AWS CLOUDWATCH                             │
-│     (Logs + Metrics + Alerts + Dashboards)              │
-└─────────────────────────────────────────────────────────┘
+Developer pushes code to GitHub
+         │
+         ▼
+┌──────────────────────────────────────────────┐
+│          GitHub Actions Pipeline             │
+│  validate → test → build → terraform → deploy → smoke │
+└──────────────────────────┬───────────────────┘
+                           │ OIDC (no static keys)
+                           ▼
+         ┌─────────────────────────────────────┐
+         │          AWS Cloud (us-east-1)       │
+         │                                     │
+         │  Internet → ALB (public subnets)    │
+         │              │                      │
+         │              ▼                      │
+         │  Auto Scaling Group (private nets)  │
+         │  EC2 × 1–4  ←→  CloudWatch Agent   │
+         │              │                      │
+         │              ▼                      │
+         │  SQLite / S3 Artifact Bucket        │
+         │  SSM Parameter Store (config)       │
+         │  Secrets Manager (secrets)          │
+         │  CloudWatch Logs + Alarms + SNS     │
+         └─────────────────────────────────────┘
 ```
 
 ---
 
-## ✨ Features
+## 📁 Repository Layout
 
-| Feature | Description |
-|---|---|
-| 🔄 **Async Processing** | SQS-based queue decouples API from Lambda processing |
-| 🤖 **AI Report Generation** | Auto-generates structured incident analysis using LLM |
-| 🗂️ **Versioned Storage** | S3 with versioning keeps full history of all reports |
-| 📣 **Real-time Notifications** | SNS pushes alerts to email/Slack/SMS on incident creation |
-| 🔁 **Retry + DLQ** | Failed messages retry 3× then land in Dead Letter Queue |
-| 📊 **Full Observability** | CloudWatch dashboards, log groups, and metric alarms |
-| 🔐 **IAM Least Privilege** | Every service uses scoped IAM roles, no wildcard permissions |
-| 🧪 **Test Coverage** | Unit + Integration tests with CI enforcement |
-
----
-
-## 🛠️ Tech Stack
-
-### Cloud & Infrastructure
-- **AWS Lambda** — Serverless compute
-- **AWS API Gateway** — REST API endpoint
-- **AWS SQS** — Message queue + DLQ
-- **AWS S3** — Object storage with versioning
-- **AWS SNS** — Pub/Sub notifications
-- **AWS CloudWatch** — Observability & alerting
-- **AWS IAM** — Role-based access control
-
-### Application
-- **Python 3.9+** — Core Lambda runtime
-- **Boto3** — AWS SDK for Python
-- **Pydantic** — Request/response validation
-- **Anthropic SDK / OpenAI SDK** — AI report generation
-
-### DevOps & Automation
-- **Terraform** — Infrastructure as Code
-- **GitHub Actions** — CI/CD pipeline
-- **Docker** — Local Lambda simulation
-- **pytest** — Testing framework
+```
+infra-system/
+├── terraform/
+│   ├── main.tf                        # Root — wires all modules
+│   ├── variables.tf                   # All input variables
+│   ├── outputs.tf                     # Key infrastructure outputs
+│   ├── dev.tfvars                     # Dev environment values
+│   └── modules/
+│       ├── vpc/                       # VPC, subnets, NAT, flow logs
+│       ├── ec2/                       # ALB, ASG, launch template, SGs
+│       ├── iam/                       # EC2 role, GitHub Actions OIDC role
+│       └── cloudwatch/                # Log groups, alarms, dashboard, SNS
+│
+├── .github/workflows/
+│   ├── cicd.yml                       # Main 6-stage CI/CD pipeline
+│   └── destroy.yml                    # Manual infrastructure teardown
+│
+├── scripts/
+│   ├── validate.sh                    # Pre-push local checks
+│   └── bootstrap-state.sh             # One-time S3 + DynamoDB state setup
+│
+├── tests/                             # (from your app repo)
+├── docs/
+│   └── INFRASTRUCTURE_GUIDE.md        # This file
+└── README.md
+```
 
 ---
 
 ## ✅ Prerequisites
 
-Before starting, make sure you have the following installed and configured:
-
-```bash
-# Check versions
-python --version        # 3.9+
-aws --version           # AWS CLI v2
-terraform --version     # >= 1.5.0
-docker --version        # Any recent version
-```
-
-### AWS Account Setup
-
-1. Create an AWS account at [aws.amazon.com](https://aws.amazon.com)
-2. Create an IAM user with programmatic access
-3. Attach the following managed policies (for dev/test):
-   - `AmazonS3FullAccess`
-   - `AmazonSQSFullAccess`
-   - `AmazonSNSFullAccess`
-   - `AWSLambda_FullAccess`
-   - `CloudWatchFullAccess`
-
-4. Configure AWS CLI:
-```bash
-aws configure
-# AWS Access Key ID: <your-key>
-# AWS Secret Access Key: <your-secret>
-# Default region: ap-south-1          # or your preferred region
-# Default output format: json
-```
+| Tool | Version | Install |
+|------|---------|---------|
+| Terraform | ≥ 1.6 | https://developer.hashicorp.com/terraform/install |
+| AWS CLI | ≥ 2.x | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
+| Python | 3.11 | https://www.python.org/downloads/ |
+| Git | any | https://git-scm.com/ |
 
 ---
 
-## 💻 Local Development Setup
+## 🔐 AWS Setup (One-Time)
 
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/techwithburhan/Agent-Pilot.git
-cd Agent-Pilot
-```
-
-### 2. Create a Virtual Environment
+### Step 1 — Create the S3 Remote State Backend
 
 ```bash
-python -m venv venv
-
-# Activate (Linux/macOS)
-source venv/bin/activate
-
-# Activate (Windows)
-.\venv\Scripts\activate
+# Edit scripts/bootstrap-state.sh and set your bucket name, then:
+chmod +x scripts/bootstrap-state.sh
+AWS_PROFILE=your-profile ./scripts/bootstrap-state.sh
 ```
 
-### 3. Install Dependencies
+### Step 2 — Create OIDC Provider for GitHub Actions
+
+Run this once in your AWS account so GitHub Actions can assume roles without static keys:
 
 ```bash
-pip install -r requirements.txt
-pip install -r requirements-dev.txt   # For testing tools
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
 ```
 
-### 4. Set Environment Variables
+### Step 3 — Update `terraform/main.tf`
 
-Create a `.env` file in the project root:
+Replace these placeholders with your real values:
 
-```env
-# AWS Config
-AWS_REGION=ap-south-1
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-
-# Application Config
-SQS_QUEUE_URL=https://sqs.ap-south-1.amazonaws.com/<account-id>/agent-pilot-queue
-S3_BUCKET_NAME=agent-pilot-reports
-SNS_TOPIC_ARN=arn:aws:sns:ap-south-1:<account-id>:agent-pilot-notifications
-DLQ_URL=https://sqs.ap-south-1.amazonaws.com/<account-id>/agent-pilot-dlq
-
-# AI Config
-ANTHROPIC_API_KEY=your_anthropic_key   # or OPENAI_API_KEY
-```
-
-> ⚠️ **Never commit `.env` to Git.** It is already listed in `.gitignore`.
-
-### 5. Run Locally with Docker
-
-```bash
-# Build local Lambda image
-docker build -t agent-pilot-local .
-
-# Run the container
-docker run -p 9000:8080 \
-  --env-file .env \
-  agent-pilot-local
-
-# Test the local endpoint
-curl -X POST "http://localhost:9000/2015-03-31/functions/function/invocations" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "incident_id": "INC-001",
-    "severity": "HIGH",
-    "title": "Database connection timeout",
-    "description": "Primary DB unreachable from app servers since 14:32 IST",
-    "reported_by": "monitoring-alert"
-  }'
-```
-
----
-
-## ☁️ AWS Services Implementation
-
-### API Gateway
-
-The REST API exposes a single `POST /incident` endpoint that accepts incident payloads and pushes them to SQS.
-
-```
-POST /incident
-Content-Type: application/json
-
-{
-  "incident_id": "INC-2025-001",
-  "severity": "HIGH",            # LOW | MEDIUM | HIGH | CRITICAL
-  "title": "Service degradation",
-  "description": "Detailed description of the incident...",
-  "reported_by": "grafana-alert"
+```hcl
+backend "s3" {
+  bucket         = "your-tfstate-bucket"   # ← your bucket name
+  key            = "autonomous-cicd/terraform.tfstate"
+  region         = "us-east-1"
+  encrypt        = true
+  dynamodb_table = "terraform-lock"
 }
 ```
 
-### SQS Queue + DLQ
+### Step 4 — Set GitHub Actions Secrets
 
-| Property | Value |
-|---|---|
-| Queue Type | Standard |
-| Visibility Timeout | 300s |
-| Max Receive Count | 3 |
-| DLQ Retention | 14 days |
+Go to your repo → **Settings → Secrets and variables → Actions** and add:
 
-```bash
-# Manually send a test message to SQS
-aws sqs send-message \
-  --queue-url $SQS_QUEUE_URL \
-  --message-body '{"incident_id":"INC-TEST","severity":"LOW","title":"Test"}'
-```
+| Secret Name | Value |
+|-------------|-------|
+| `AWS_DEPLOY_ROLE_ARN` | ARN of the GitHub Actions IAM role created by Terraform |
+| `ARTIFACT_BUCKET` | Name of your S3 artifact bucket |
+| `ALARM_EMAIL` | Email for CloudWatch alert notifications |
 
-### Lambda Function
-
-- **Runtime:** Python 3.9
-- **Memory:** 512 MB
-- **Timeout:** 60 seconds
-- **Trigger:** SQS event source mapping (batch size: 1)
-
-```bash
-# Invoke Lambda directly (for testing)
-aws lambda invoke \
-  --function-name agent-pilot-processor \
-  --payload file://tests/sample_event.json \
-  output.json && cat output.json
-```
-
-### S3 Bucket
-
-Reports are stored with the following key structure:
-
-```
-agent-pilot-reports/
-  └── YYYY/
-       └── MM/
-            └── DD/
-                 └── INC-2025-001-report.json
-```
-
-```bash
-# List all generated reports
-aws s3 ls s3://agent-pilot-reports/ --recursive
-
-# Download a specific report
-aws s3 cp s3://agent-pilot-reports/2025/06/01/INC-001-report.json ./report.json
-```
-
-### SNS Notifications
-
-Subscribe your email to receive alerts:
-
-```bash
-aws sns subscribe \
-  --topic-arn $SNS_TOPIC_ARN \
-  --protocol email \
-  --notification-endpoint your@email.com
-```
-
-> Check your inbox and confirm the subscription link.
+> **Never** add `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` — the pipeline uses OIDC.
 
 ---
 
-## 🧪 Testing Strategy
-
-### Unit Tests
-
-Tests mock all AWS services using `moto` — no real AWS calls are made.
+## 🚀 First-Time Deployment (Manual)
 
 ```bash
-# Run unit tests
-pytest tests/unit/ -v
+# 1. Initialize Terraform
+terraform -chdir=terraform init
 
-# With coverage report
-pytest tests/unit/ -v --cov=src --cov-report=term-missing
+# 2. Plan (review what will be created)
+terraform -chdir=terraform plan -var-file=dev.tfvars \
+  -var="alarm_email=you@example.com"
+
+# 3. Apply
+terraform -chdir=terraform apply -var-file=dev.tfvars \
+  -var="alarm_email=you@example.com"
+
+# 4. Get outputs
+terraform -chdir=terraform output
 ```
 
-### Integration Tests
-
-Integration tests hit real AWS resources. Requires valid `.env` configured.
-
-```bash
-pytest tests/integration/ -v
+Expected output:
 ```
-
-### Sample Test Structure
-
-```
-tests/
-├── unit/
-│   ├── test_incident_parser.py
-│   ├── test_report_generator.py
-│   └── test_s3_storage.py
-├── integration/
-│   ├── test_sqs_flow.py
-│   └── test_end_to_end.py
-└── sample_event.json
-```
-
-### Sample `sample_event.json`
-
-```json
-{
-  "Records": [
-    {
-      "messageId": "test-msg-001",
-      "body": "{\"incident_id\":\"INC-001\",\"severity\":\"HIGH\",\"title\":\"DB timeout\",\"description\":\"Primary DB unreachable\",\"reported_by\":\"cloudwatch-alarm\"}"
-    }
-  ]
-}
+alb_dns_name             = "dev-autonomous-cicd-optimizer-alb-XXXX.us-east-1.elb.amazonaws.com"
+app_url                  = "http://dev-autonomous-cicd-optimizer-alb-XXXX.us-east-1.elb.amazonaws.com:8000"
+cloudwatch_dashboard_url = "https://us-east-1.console.aws.amazon.com/cloudwatch/home?..."
 ```
 
 ---
 
-## 🔄 CI/CD Pipeline
+## ⚙️ CI/CD Pipeline Stages
 
-The pipeline is defined in `.github/workflows/test.yml` and runs on every push and pull request to `main`.
-
-### Pipeline Stages
+Every push to `main` triggers all 6 stages automatically:
 
 ```
-Push to main / PR
-      │
-      ▼
-┌─────────────┐
-│   Lint      │  flake8, black --check
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Unit Test  │  pytest tests/unit/ --cov
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Build      │  docker build
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  Deploy     │  terraform apply (on merge to main only)
-└─────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                     GitHub Actions Pipeline                          │
+│                                                                      │
+│  [validate]──►[test]──►[build]──►[terraform]──►[deploy]──►[smoke]  │
+│                                                                      │
+│  validate:  ruff lint, mypy, bandit, safety, terraform fmt          │
+│  test:      pytest --cov-fail-under=70                              │
+│  build:     tar app, upload to S3 (versioned + latest/)             │
+│  terraform: plan on PR, auto-apply on main                          │
+│  deploy:    rolling ASG instance refresh (50% min healthy)          │
+│  smoke:     /health check + /status/checks must be PASS             │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### GitHub Secrets Required
+### Pull Request behaviour
+- Runs **validate** and **test** only (no deploy)
+- Posts Terraform plan as a PR comment
+- Blocks merge if any check fails
 
-Go to **Settings → Secrets → Actions** and add:
-
-| Secret | Description |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM user access key |
-| `AWS_SECRET_ACCESS_KEY` | IAM user secret |
-| `AWS_REGION` | e.g. `ap-south-1` |
-| `ANTHROPIC_API_KEY` | AI provider key |
+### Push to `main` behaviour
+- Runs all 6 stages end-to-end
+- Deploys to **dev** environment automatically
+- Triggers CloudWatch alert if smoke test fails
 
 ---
 
-## 📊 Monitoring & Logging
+## 🌿 Environment Management
 
-### CloudWatch Log Groups
+| Environment | Auto-Deploy | Min Instances | Instance Type |
+|-------------|------------|---------------|---------------|
+| `dev`       | ✅ on push to `main` | 1 | t3.micro |
+| `staging`   | 🔒 manual trigger | 2 | t3.small |
+| `prod`      | 🔒 manual + approval | 2 | t3.medium |
 
-| Log Group | Description |
-|---|---|
-| `/aws/lambda/agent-pilot-processor` | Lambda execution logs |
-| `/aws/apigateway/agent-pilot-api` | API Gateway access logs |
+To deploy to staging or prod manually:
 
-```bash
-# Tail Lambda logs live
-aws logs tail /aws/lambda/agent-pilot-processor --follow
+```
+GitHub → Actions → "CI/CD Pipeline" → Run workflow → Select environment
 ```
 
-### CloudWatch Alarms
+---
 
-The following alarms are configured:
-
-| Alarm | Condition | Action |
-|---|---|---|
-| High Error Rate | Lambda errors > 5 in 5 min | SNS Alert |
-| DLQ Message Count | DLQ messages > 0 | SNS Alert |
-| Lambda Duration | p95 > 30s | SNS Alert |
+## 📊 Monitoring & Alerting
 
 ### CloudWatch Dashboard
 
-A pre-built dashboard `AgentPilot-Overview` shows:
-- Incidents processed per hour
-- Lambda error rate
-- SQS queue depth
-- DLQ message count
-- S3 report upload count
+Access your live dashboard via the `cloudwatch_dashboard_url` Terraform output. It shows:
+- ALB request count and 5xx error rate
+- ASG CPU utilization
+- Custom app error count (extracted from logs)
+- Webhook failure count
+- Live log tail for `ERROR` lines
+
+### Alarms (SNS → Email)
+
+| Alarm | Trigger Condition |
+|-------|------------------|
+| `alb-5xx-high` | More than 10 HTTP 5xx errors in 5 minutes |
+| `unhealthy-hosts` | Any ALB target becomes unhealthy |
+| `asg-cpu-high` | Average CPU > 80% for 15 minutes |
+| `app-errors-high` | More than 10 ERROR log entries in 5 minutes |
+
+### Log Groups
+
+| Log Group | Contents |
+|-----------|----------|
+| `/app/{env}/autonomous-cicd-optimizer` | Application logs (FastAPI + uvicorn) |
+| `/system/{env}/autonomous-cicd-optimizer` | System/bootstrap logs |
+| `/aws/vpc/flow-logs/{env}` | VPC network flow logs |
 
 ---
 
-## 🚀 Deployment
+## 🔐 Security Features
 
-### First-Time Deployment (Terraform)
+### No Static AWS Credentials
+- GitHub Actions authenticates via **OIDC** — no `AWS_ACCESS_KEY_ID` ever stored
+- EC2 instances use **IAM instance profiles** — no credentials on disk
 
-```bash
-cd infra/
+### Least-Privilege IAM
+- EC2 role: can only write to its own log group and read its own SSM parameters
+- GitHub Actions role: scoped to ASG operations + S3 state bucket only
+- No wildcard `*` resource on sensitive actions
 
-# Initialize Terraform
-terraform init
+### Secrets Management
+- App secrets stored in **AWS Secrets Manager** at `{env}/{app-name}/env`
+- Non-secret config in **SSM Parameter Store**
+- Secrets injected into systemd service as environment variables at boot
+- Nothing sensitive in Git, nothing in EC2 user data plain text
 
-# Preview changes
-terraform plan -var-file="vars/prod.tfvars"
+### Network Security
+- EC2 instances in **private subnets** — no public IPs
+- ALB is the only public entry point
+- Security group rules: EC2 only accepts traffic from ALB SG
+- **IMDSv2** enforced on all EC2 instances (prevents SSRF attacks on metadata)
+- EBS volumes encrypted at rest
 
-# Apply infrastructure
-terraform apply -var-file="vars/prod.tfvars"
-```
-
-### Deploy Lambda Code Only
-
-```bash
-# Zip and deploy Lambda function
-zip -r lambda.zip src/ requirements.txt
-
-aws lambda update-function-code \
-  --function-name agent-pilot-processor \
-  --zip-file fileb://lambda.zip
-```
-
-### Destroy Infrastructure
-
-```bash
-# ⚠️ This will delete ALL resources
-terraform destroy -var-file="vars/prod.tfvars"
-```
+### Additional Hardening
+- `enable_deletion_protection = true` on ALB in prod
+- VPC flow logs enabled in staging/prod
+- S3 buckets have all public access blocked
+- ALB access logs stored in a dedicated, lifecycle-managed S3 bucket
+- systemd service runs as unprivileged `appuser` with `NoNewPrivileges=yes`
 
 ---
 
-## 🔧 Troubleshooting
+## 📈 Scalability
 
-### Lambda Not Triggering from SQS
+The infrastructure scales automatically using a **Target Tracking Auto Scaling Policy**:
 
+- **Scale-out**: triggered when average CPU > 60% — adds instances within ~3 minutes
+- **Scale-in**: removes instances when CPU drops back — gradual to avoid thrashing
+- **Min/Max**: configurable per environment via `asg_min_size` / `asg_max_size`
+- **Deployment**: rolling instance refresh ensures zero-downtime deploys
+
+To change capacity limits without redeploying:
 ```bash
-# Check event source mapping is enabled
-aws lambda list-event-source-mappings \
-  --function-name agent-pilot-processor
-
-# Enable if disabled
-aws lambda update-event-source-mapping \
-  --uuid <mapping-uuid> \
-  --enabled
-```
-
-### Messages Stuck in DLQ
-
-```bash
-# View DLQ messages
-aws sqs receive-message \
-  --queue-url $DLQ_URL \
-  --max-number-of-messages 10
-
-# Redrive messages back to main queue (after fixing the bug)
-# Set DLQ redrive policy via console or update source mapping
-```
-
-### S3 Permission Denied
-
-Check Lambda execution role has `s3:PutObject` on the correct bucket ARN:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": ["s3:PutObject", "s3:GetObject"],
-  "Resource": "arn:aws:s3:::agent-pilot-reports/*"
-}
-```
-
-### Environment Variables Missing in Lambda
-
-```bash
-aws lambda update-function-configuration \
-  --function-name agent-pilot-processor \
-  --environment "Variables={S3_BUCKET_NAME=agent-pilot-reports,SNS_TOPIC_ARN=arn:aws:sns:...}"
-```
-
-### Local Docker Not Connecting to AWS
-
-Ensure your `.env` is mounted and credentials are valid:
-
-```bash
-# Verify credentials work
-aws sts get-caller-identity
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name dev-autonomous-cicd-optimizer-asg \
+  --min-size 2 --max-size 8 --desired-capacity 3
 ```
 
 ---
 
-## 🤝 Contributing
+## 🐛 Error Handling & Debugging
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make changes and write tests
-4. Ensure all tests pass: `pytest tests/unit/ -v`
-5. Push and open a Pull Request
+### Deployment Fails — Instance Refresh
+```bash
+# Check refresh status
+aws autoscaling describe-instance-refreshes \
+  --auto-scaling-group-name dev-autonomous-cicd-optimizer-asg
+
+# Check instance health
+aws autoscaling describe-auto-scaling-instances \
+  --filters Name=auto-scaling-group-name,Values=dev-autonomous-cicd-optimizer-asg
+```
+
+### App Not Responding
+```bash
+# Check logs via CloudWatch Logs Insights
+aws logs filter-log-events \
+  --log-group-name /app/dev/autonomous-cicd-optimizer \
+  --filter-pattern "ERROR" \
+  --start-time $(date -d '1 hour ago' +%s000)
+
+# Connect to instance via SSM (no SSH key needed!)
+aws ssm start-session --target <instance-id>
+sudo journalctl -u autonomous-cicd-optimizer -f
+```
+
+### Terraform State Issues
+```bash
+# Check who holds the lock
+aws dynamodb get-item \
+  --table-name terraform-lock \
+  --key '{"LockID": {"S": "your-tfstate-bucket/autonomous-cicd/terraform.tfstate"}}'
+
+# Force-unlock if a pipeline was interrupted
+terraform -chdir=terraform force-unlock <lock-id>
+```
 
 ---
 
-## 📄 License
+## 🧪 Running Tests Locally
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+```bash
+# Full local validation (lint + type check + security + tests + terraform fmt)
+chmod +x scripts/validate.sh
+./scripts/validate.sh
+
+# Tests only
+pytest tests/ -v --cov=app --cov-report=term-missing
+
+# Single test file
+pytest tests/test_risk.py -v
+```
 
 ---
+
+## 🗑️ Teardown
+
+To destroy all infrastructure (dev/staging only — prod is protected):
+
+```
+GitHub → Actions → "Destroy Infrastructure" → Run workflow
+→ Select environment: dev
+→ Type: DESTROY
+→ Run workflow
+```
+
+Or locally:
+```bash
+terraform -chdir=terraform destroy \
+  -var-file=dev.tfvars \
+  -var="alarm_email=you@example.com"
+```
+
+---
+
+## 💰 Cost Estimate (dev environment)
+
+| Resource | Monthly Cost |
+|----------|-------------|
+| EC2 t3.micro × 1 | ~$8.50 |
+| ALB | ~$16 |
+| NAT Gateway | ~$32 |
+| S3 (state + artifacts + logs) | ~$2 |
+| CloudWatch logs + metrics | ~$5 |
+| **Total (dev)** | **~$63/month** |
+
+> Tip: Destroy dev at end of day with the destroy workflow to save ~80% of compute cost.
+
+---
+
+## 📋 Required GitHub Secrets Summary
+
+```
+AWS_DEPLOY_ROLE_ARN     → arn:aws:iam::ACCOUNT_ID:role/dev-app-github-actions-role
+ARTIFACT_BUCKET         → your-app-artifacts-bucket-name
+ALARM_EMAIL             → alerts@yourteam.com
+```
+
+---
+
+*Generated for: Bhardwaj5568 / Autonomous-CI-CD-Pipeline-Optimizer*
+*Infrastructure version: 1.0.0*
+
 
 
