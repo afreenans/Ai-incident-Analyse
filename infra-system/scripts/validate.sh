@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-###############################################################################
-# scripts/validate.sh — Local validation before pushing to CI
-# Usage: ./scripts/validate.sh
-###############################################################################
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
