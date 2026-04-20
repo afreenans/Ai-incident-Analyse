@@ -1,15 +1,4 @@
-###############################################################################
-# GitHub Actions — Full CI/CD Pipeline
-# Autonomous CI/CD Pipeline Optimizer
-#
-# Stages:
-#   1. validate   → lint, type-check, security scan
-#   2. test       → pytest with coverage gate
-#   3. build      → package app artifact, push to S3
-#   4. terraform  → plan (PR) or apply (main)
-#   5. deploy     → rolling instance refresh on ASG
-#   6. smoke      → post-deploy health check
-###############################################################################
+
 
 name: CI/CD Pipeline
 
