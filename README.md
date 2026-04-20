@@ -385,8 +385,7 @@ ALARM_EMAIL             → alerts@yourteam.com
 
 ---
 
-*Generated for: Bhardwaj5568 / Autonomous-CI-CD-Pipeline-Optimizer*
-*Infrastructure version: 1.0.0*
+
 
 
 
