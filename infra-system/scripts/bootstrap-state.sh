@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-###############################################################################
-# scripts/bootstrap-state.sh
-# Run ONCE to create the S3 + DynamoDB remote state backend
-# Usage: AWS_PROFILE=your-profile ./scripts/bootstrap-state.sh
-###############################################################################
+
 set -euo pipefail
 
 BUCKET="your-tfstate-bucket"     # Change me
