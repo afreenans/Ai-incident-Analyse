@@ -4,7 +4,7 @@
 
 ## 📌 Overview
 
-This system provisions, manages, and monitors a **production-ready AWS infrastructure** for the Autonomous CI/CD Pipeline Optimizer backend. It uses Terraform for Infrastructure as Code, GitHub Actions for the CI/CD pipeline, and CloudWatch for observability — all wired together with zero static AWS credentials.
+This system provisions, manages, and monitors a **production-ready AWS infrastructure** for the Autonomous CI/CD Pipeline . It uses Terraform for Infrastructure as Code, GitHub Actions for the CI/CD pipeline, and CloudWatch for observability — all wired together with zero static AWS credentials.
 
 ---
 
